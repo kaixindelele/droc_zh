@@ -1,7 +1,7 @@
 import time
 import numpy as np
 from utils.exception_utils import InterruptedByHuman, RobotError, GraspError
-from utils.robot.panda_env import PandaEnv
+from utils.robot.panda_env import PandaEnv, GraspFlipEnv
 from scipy.spatial.transform import Rotation
 from utils.transformation_utils import extract_z_axis, pose_to_mat, quat_to_euler, add_euler, euler_to_quat, quat_to_mat, mat_to_quat, mat_to_euler
 
@@ -26,8 +26,43 @@ def calculate_frame_quaternion(g_x, g_z):
 
 class KptPrimitivePolicy:
     def __init__(self):
-        self.robot_env = PandaEnv()
-        self.robot_env.reset()
+        
+        # self.robot_env = PandaEnv()
+        from omegaconf import OmegaConf
+        # Configure camera
+        camera_height = 3   # orthographic
+        # camera_height = 0.4
+        camera_param = OmegaConf.create()
+        camera_param.pos = [0.5, 0, camera_height]
+        camera_param.euler = [0, -np.pi, np.pi/2] # extrinsic - top-down
+        camera_param.img_w = 512
+        camera_param.img_h = 512
+        camera_param.aspect = 1
+        camera_param.fov = 60    # vertical fov in degrees
+        camera_param.use_rgb = True
+        camera_param.use_depth = True
+        camera_param.max_depth = camera_height
+        camera_param.min_depth = camera_height - 0.15
+
+        # Resulting focal length and workspace half dimension, assume aspect=1 for now
+        focal_len = camera_param.img_h / (2*np.tan(camera_param.fov*np.pi/180/2))
+        print('Focal length: ', focal_len)
+        workspace_half_dim = np.tan(camera_param['fov']/2*np.pi/180)*camera_height
+        print('Workspace half dimension: ', workspace_half_dim)
+
+        task = OmegaConf.create()
+        task.obj_path = r'C:\Users\le\Videos\droc\utils\robot\data\sample\mug\3.urdf'
+        task.obj_pos = [0.6, 0.1, 0.05]
+        task.obj_quat = [0, 0, 0, 1]
+        task.global_scaling = 1.2
+        task.table_rgba = [0.3,0.3,0.3,1]
+        self.robot_env = GraspFlipEnv(task=task,
+                                    render=False,
+                                    camera_param=camera_param,
+                                    mu=0.5,
+                                    sigma=0.03)
+        # self.robot_env = GraspFlipEnv()
+        obs = self.robot_env.reset(task=task)
 
     def close_gripper(self, check_grasp=True):
         self.robot_env.gripper.grasp(speed=GRIPPER_SPEED, force=GRIPPER_FORCE, blocking=True)
@@ -186,5 +221,11 @@ class KptPrimitivePolicy:
         return quat
 
     def get_vertical_ori(self):
+        """
+        获取一个指向垂直方向（即Z轴负方向）的四元数方向。
+    
+        返回:
+            numpy.ndarray: 一个四元数，表示指向Z轴负方向的方向。
+        """
         target_z_aixs = np.array((0.,0.,-1.))
         return self.align_z_axis_with_vector(target_z_aixs)

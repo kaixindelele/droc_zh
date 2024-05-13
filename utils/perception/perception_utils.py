@@ -23,7 +23,7 @@ prompt_get_obj_name_from_task = read_py('prompts/get_obj_name_from_task.txt')
 prompt_update_obj_state_file = 'prompts/update_obj_state.txt'
 prompt_get_initial_obj_state = read_py('prompts/get_ini_obj_state.txt')
 
-# global variables
+#全局变量
 load_detected_objs = None
 popped_detected_objs = []
 saved_detected_obj = {}
@@ -34,6 +34,7 @@ TASK = None
 REAL_ROBOT = None
 policy = None
 clip_model = None
+tokenizer = None
 
 def get_considered_classes():
     if TASK == 'drawer':
@@ -61,7 +62,7 @@ class ToScaledFloat:
         pass
 
     def __call__(self, pic):
-        # assert pic.dtype == torch.uint8, f"{pic.dtype}"
+        #断言 pic.dtype == torch.uint8, f"{pic.dtype}"
         pic = pic.float() / 255.0
         return pic
 
@@ -91,7 +92,7 @@ class detected_object:
         self.dino_feature = None
         self.detected_pose = None
 
-# ---------------------------------- Initialization ----------------------------------
+#----------------------------------初始化 ----------------------------------
 
 def set_policy_and_task(real_robot, task):
     global TASK, REAL_ROBOT, policy
@@ -106,6 +107,7 @@ def set_policy_and_task(real_robot, task):
     from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
     from utils.perception.owl_vit import clip_with_owl
     device = "cuda" if torch.cuda.is_available() else "cpu"    
+    device = "cpu"
     if REAL_ROBOT:
         import utils.robot.robot_policy as robot_policy
         policy = robot_policy.KptPrimitivePolicy()
@@ -113,28 +115,37 @@ def set_policy_and_task(real_robot, task):
         from utils.robot.dummy_policy import DummyPolicy
         policy = DummyPolicy()
 
-def initialize_detection(first=False, load_image=False, folder_path='cache/image_for_retrieval', image_pattern='*.png', label=['cup', 'drawer']):
+def initialize_detection(first=False, load_image=False, 
+                         folder_path='cache/image_for_retrieval', 
+                         image_pattern='*.png', 
+                         label=['cup', 'drawer'],
+                         robot_env=None):
     global load_detected_objs, saved_detected_obj, queried_obj, clip_model, clip_preprocess
     queried_obj = detected_object()
     if REAL_ROBOT:
         if first:
-            a = input("Can I use last round detection? (y/n)")
+            #a = input("我可以使用上一轮检测吗？(y/n)")
+            a = 'n'
         else:
             a = 'y'
         if 'n' in a:
-            detect_objs(load_from_cache=False, save_to_cache=False, visualize=False)
+            detect_objs(load_from_cache=False, 
+                        save_to_cache=False, 
+                        visualize=False,
+                        robot_env=robot_env)
             saved_detected_obj = {}
         load_detected_objs = pickle.load(open(f"log/{TASK}/detected_objs.pkl", "rb"))
     else:
         if first:
-            a = input("Can I use last round detection? (y/n)")
+            #a = input("我可以使用上一轮检测吗？(y/n)")
+            a = 'n'
         else:
             a = 'y'
         if 'n' in a:
             saved_detected_obj = {}
         if first:
             if load_image:
-                # Only consider clip feature here
+                #这里只考虑剪辑功能
                 if clip_model is None:
                     print("Loading CLIP...")
                     clip_model, _, clip_preprocess = open_clip.create_model_and_transforms('ViT-g-14', pretrained='laion2b_s34b_b88k')
@@ -155,6 +166,9 @@ def initialize_detection(first=False, load_image=False, folder_path='cache/image
                         img = Image.open(file)
                         img = clip_preprocess(img).to(device)
                         all_img.append(img)
+                    if not all_img:
+                        print("all_img list is empty:", all_img)
+                        raise ValueError("all_img list is empty")
                     preprocessed_images = torch.stack(all_img)    
                     with torch.no_grad(), torch.cuda.amp.autocast():
                         image_features = clip_model.encode_image(preprocessed_images)
@@ -167,9 +181,11 @@ def initialize_detection(first=False, load_image=False, folder_path='cache/image
         else:
             load_detected_objs = pickle.load(open(f"log/{TASK}/detected_objs.pkl", "rb"))
 
-def create_loaded_objs(img_dict=None):
+def create_loaded_objs(img_dict=None, obj_name = 'cup'):
     considered_classes, _ = get_considered_classes()
     load_detected_objs = {}
+    
+    print("img_dict.keys():", img_dict.keys())
     for cls in considered_classes:
         if img_dict is None:
             obj_name = cls[0]
@@ -195,13 +211,13 @@ def get_objs():
 
 def get_initial_state():
     global load_detected_objs
-    # obj_list_str = ''
-    # for obj_name in list(load_detected_objs.keys()):
-    #     obj_list_str += obj_name + ', '
-    # obj_list_str = obj_list_str[:-2]
-    # whole_prompt = prompt_get_initial_obj_state + '\n' + 'Object name: ' + obj_list_str +'\n' + 'Object state:'
-    # response = query_LLM(whole_prompt, [], "cache/llm_get_initial_state.pkl")
-    # initial_state = response.text
+    #obj_list_str = ''
+#对于列表中的 obj_name(load_Detected_objs.keys())：
+#obj_list_str += obj_name + ', '
+#obj_list_str = obj_list_str[:-2]
+#Whole_prompt = Prompt_get_initial_obj_state + '\n' + '对象名称：' + obj_list_str +'\n' + '对象状态：'
+#响应 = query_LLM(whole_prompt, [], "cache/llm_get_initial_state.pkl")
+#初始状态=响应.文本
     initial_state = 'Object state: N/A'
     return initial_state
 
@@ -226,7 +242,7 @@ def set_saved_detected_obj(task_name, task_feature):
     obj_name = get_obj_name_from_task(task_name)
     saved_detected_obj[obj_name] = task_feature
 
-# ---------------------------------- Primitives ----------------------------------
+#----------------------------------基元 ----------------------------------
 
 def _change_reference_frame(wrong_direction, right_direction):
     global queried_obj
@@ -333,7 +349,7 @@ def _correct_past_detection(obj_name, obj):
             popped_detected_objs.append(popped_elem)
             break
 
-# ---------------------------------- Parsing ----------------------------------
+#----------------------------------解析 ----------------------------------
 
 def get_obj_name_from_task(task_name):
     prompt = prompt_get_obj_name_from_task + '\n' + f'Input: {task_name}' + '\n' + 'Output: '
@@ -387,7 +403,7 @@ def calculate_pos_scale():
     more_back = mapping_dict["'More' for 'forward' or 'back'"]/100
     return mapping_dict, little_left, little_up, little_forward, more_back
 
-# ---------------------------------- Detection ----------------------------------
+#----------------------------------检测 ----------------------------------
 
 def _get_task_detection(task_name):
     """Given task name, find corresponding feature"""
@@ -423,7 +439,7 @@ def _get_task_detection(task_name):
         else:
             _correct_past_detection(obj_name, obj)
 
-def detect(obj_name, visualize=False):
+def detect(obj_name, visualize=False, robot_env=None):
     global load_detected_objs, saved_detected_obj
 
     parsed_obj_name = parse_obj_name(obj_name)
@@ -435,7 +451,8 @@ def detect(obj_name, visualize=False):
             if "y" in a:
                 break
         if REAL_ROBOT:
-            detect_objs(load_from_cache=False, save_to_cache=False, visualize=visualize)
+            detect_objs(load_from_cache=False, save_to_cache=False, visualize=visualize,
+                        robot_env=robot_env)
             load_detected_objs = pickle.load(open(f"log/{TASK}/detected_objs.pkl", "rb"))
         else:
             load_detected_objs = create_loaded_objs()
@@ -494,66 +511,90 @@ def sort_from_high_to_low(all_obj, key):
         obj_list.append(obj)
     return obj_list
 
-def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, visualize=False):
+def detect_objs(load_from_cache=False, 
+                run_on_server=False, 
+                save_to_cache=True, 
+                visualize=False,
+                robot_env=None):
+    """
+    检测物体并生成标签。
+
+    Args:
+        load_from_cache (bool, optional): 是否从缓存加载数据。默认为 False。
+        run_on_server (bool, optional): 是否在服务器上运行。默认为 False。
+        save_to_cache (bool, optional): 是否保存到缓存。默认为 True。
+        visualize (bool, optional): 是否可视化。默认为 False。
+        robot_env (object, optional): 机器人环境对象。默认为 None。
+
+    Returns:
+        dict: 检测到的物体字典，以物体类别为键，对应的物体列表为值。
+    """
     global clip_model, clip_preprocess
-    parent_folder = 'cache'
-    items = os.listdir(parent_folder)
+    parent_folder = 'cache'  # 缓存文件夹的父文件夹
+    items = os.listdir(parent_folder)  # 获取父文件夹中的所有项目
     for item in items:
         item_path = os.path.join(parent_folder, item)    
         if os.path.isdir(item_path) and (item[0].isdigit() or item == TASK):
             try:
-                shutil.rmtree(item_path)
-                print(f"Folder '{item_path}' and its contents deleted successfully.")
+                shutil.rmtree(item_path)  # 删除文件夹及其内容
+                print(f"文件夹 '{item_path}' 及其内容已成功删除。")
             except OSError as e:
-                print(f"Error deleting '{item_path}': {e}")
+                print(f"删除 '{item_path}' 时出错：{e}")
     try:
-        shutil.rmtree(f'log/{TASK}')
-        print(f"Folder 'log/{TASK}' and its contents deleted successfully.")
+        shutil.rmtree(f'log/{TASK}')  # 删除日志文件夹及其内容
+        print(f"文件夹 'log/{TASK}' 及其内容已成功删除。")
     except OSError as e:
-        print(f"Error deleting '{item_path}': {e}")
+        print(f"删除 '{item_path}' 时出错：{e}")
 
-    print("Loading CLIP model...")
+    print("正在加载 CLIP 模型...")
     init_time = time.time()
     if clip_model is None:
         clip_model, _, clip_preprocess = open_clip.create_model_and_transforms('ViT-g-14', pretrained='laion2b_s34b_b88k')
-    print("time taken:", time.time() - init_time)
+    print("耗时:", time.time() - init_time)
 
-    print("Loading DINOv2 model...")
+    print("正在加载 DINOv2 模型...")
     init_time = time.time()
     dinov2_model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
     dinov2_model.train(False)
     for param in dinov2_model.parameters():
         param.requires_grad = False
     dinov2_preprocess = DinoImageTransform()
-    print("time take: ", time.time() - init_time)
+    print("耗时:", time.time() - init_time)
 
     clip_candidates = setup_clip_words()
     text_features = get_text_features(clip_candidates, clip_model)
     considered_classes, other_classes = get_considered_classes()
     detected_objs = {words[0]: [] for words in considered_classes}
     if load_from_cache:
-        print('Loading data...')
+        print('正在加载数据...')
         init_time = time.time()
         bgr_images = pickle.load(open(f"cache/{TASK}/bgr_images.pkl", "rb"))
         pcd_merged = o3d.io.read_point_cloud(f"cache/{TASK}/pcd_merged.pcd")
         detected_objs = pickle.load(open(f"cache/{TASK}/detected_objs.pkl", "rb"))
-        print("time taken:", time.time() - init_time)
+        print("耗时:", time.time() - init_time)
     else:
-        print("Computing point cloud...")
+        print("正在计算点云...")
         init_time = time.time()
         used_camera_idx = 0
-        # TODO: use this after you implement utils/perception/camera.py
-        from utils.perception.camera import multi_cam
-        bgr_images, pcd_merged, raw_points, _ = multi_cam.take_bgrd(visualize=visualize)
-        image = bgr_images[realsense_serial_numbers[used_camera_idx]]
-        coord2point_3d = raw_points[used_camera_idx]
+        # TODO: 在实现 utils/perception/camera.py 后使用它
+        # 从 utils.perception.camera 导入 multi_cam
+        # bgr_images，pcd_merged，raw_points，_ = multi_cam.take_bgrd（可视化=可视化）
+        images = robot_env._get_obs(robot_env._camera_param)
+        print("images:", images)
+        print("images.shape:", images.shape)
+        bgr_images, pcd_merged, raw_points, _ = images
+        # 图像 = bgr_images[realsense_serial_numbers[used_camera_idx]]
+        image = images[1:, :, :]
+        print("image.shape:", image.shape)
+        coord2point_3d = images[0, :, :]
         del raw_points
-        print("time taken:", time.time() - init_time)
-     
-        print("Loading SAM model...")
+        print("耗时:", time.time() - init_time)
+
+        print("正在加载 SAM 模型...")
         init_time = time.time()
+        image = image.transpose(1, 2, 0)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) 
-        sam = sam_model_registry["vit_h"](checkpoint="cache/sam_vit_h_4b8939.pth")
+        sam = sam_model_registry["vit_h"](checkpoint=r"E:\sd-webui-aki-v4.3\extensions\sd-webui-segment-anything\models\sam\sam_vit_h_4b8939.pth")
         mask_generator = SamAutomaticMaskGenerator(
             model=sam,
             points_per_side=32, 
@@ -564,16 +605,16 @@ def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, 
             crop_overlap_ratio=0.6,
             min_mask_region_area=100
         )
-        print("time taken:", time.time() - init_time)
-    
-        print("Cropping picture...")
+        print("耗时:", time.time() - init_time)
+
+        print("正在裁剪图片...")
         init_time = time.time()
         height, width = image.shape[:2]
         print(width, height)
         coord2point_3d = np.reshape(coord2point_3d, (height, width, -1))
-        print("time taken:", time.time() - init_time)
+        print("耗时:", time.time() - init_time)
 
-        print("Generating masks...")
+        print("正在生成掩码...")
         init_time = time.time()
         sam.to(device=device)
         masks = mask_generator.generate(image)
@@ -582,7 +623,7 @@ def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, 
         mask_preprocessed_images = []
         extra_classes, num = get_extra_classes()
         if extra_classes is not None:
-            extra_masks, boxes = clip_with_owl(image, num, sam, obj_name=extra_classes[0], visualize=False)
+            extra_masks, boxes = clip_with_owl(image, num, sam, obj_name=extra_classes[0], visualize=True)
             for mask, box in zip(extra_masks, boxes):
                 tmp_mask = {'segmentation': mask, 'bbox': box, 'area': mask.sum()}
                 masks.append(tmp_mask)
@@ -591,13 +632,13 @@ def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, 
         masks = sorted(masks, key=(lambda x: x['area']), reverse=True)
         del sam
         del mask_generator
-        print("time taken:", time.time() - init_time)
+        print("耗时:", time.time() - init_time)
 
-        print("Processing masks...")
+        print("正在处理掩码...")
         init_time = time.time()
         for i, mask in enumerate(masks):
-            # if mask['area'] < 600:
-            #     break
+            # 如果掩码['区域'] < 600：
+            # reset
             duplicate = False
             for prev_mask in masks[:i]:
                 intersection = np.sum(mask['segmentation'] & prev_mask['segmentation'])
@@ -611,7 +652,7 @@ def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, 
             x, y, w, h = map(int, mask['bbox'])
             print(x, y, w, h)
             # bbox = (y,x,y+h,x+w)
-            # project(used_camera_idx,bbox,max_num=300)
+            # 项目（used_camera_idx，bbox，max_num = 300）
             background = 255
             im = np.ones((h, w, 3), dtype=np.uint8) * background
             mask_points.append(coord2point_3d[mask['segmentation']])
@@ -620,13 +661,13 @@ def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, 
             im[new_mask] = image[y:min(y+h, height), x:min(x+w, width), :][new_mask]
             square_size = max(h, w) + 6
             im = np.pad(im, (((square_size - h) // 2, (square_size - h) // 2), ((square_size - w) // 2, (square_size - w) // 2), (0, 0)), 'constant', constant_values=background)
-            # im = image[y:y+h, x:x+w, :]
+            # im = 图像[y:y+h, x:x+w, :]
             mask_images.append(im)
             mask_preprocessed_images.append(clip_preprocess(Image.fromarray(im)).to(device))
         mask_preprocessed_images = torch.stack(mask_preprocessed_images)
-        print("time taken:", time.time() - init_time)
+        print("耗时:", time.time() - init_time)
 
-        print("Getting labels with CLIP...")
+        print("正在使用 CLIP 获取标签...")
         init_time = time.time()
         clip_model.to(device=device)
         with torch.no_grad(), torch.cuda.amp.autocast():
@@ -636,9 +677,9 @@ def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, 
             print(image_features.shape, text_features.shape)
         clip_model.to(device="cpu")
         image_features = image_features.cpu().numpy()
-        print("time taken:", time.time() - init_time)
+        print("耗时:", time.time() - init_time)
 
-        print("Compute DINOv2 features...")
+        print("正在计算 DINOv2 特征...")
         init_time = time.time()
         for i in range(len(mask_images)):
             mask_images[i] = cv2.resize(mask_images[i], (224, 224))
@@ -648,9 +689,9 @@ def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, 
         dino_image_features = F.normalize(dino_image_features, dim=-1)
         dinov2_model.to(device="cpu")
         dino_image_features = dino_image_features.cpu().numpy()
-        print("time taken:", time.time() - init_time)
+        print("耗时:", time.time() - init_time)
 
-        print("Postprocessing raw CLIP probabilities...")
+        print("正在后处理原始 CLIP 概率...")
         init_time = time.time()
         len_list = [len(words) for words in considered_classes + other_classes]
         probs = torch.zeros(*raw_probs.shape[:1], len(considered_classes) + len(other_classes), dtype=raw_probs.dtype, device=raw_probs.device)
@@ -661,21 +702,21 @@ def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, 
         del raw_probs
         del clip_model
         del clip_preprocess
-        print("time taken:", time.time() - init_time)
+        print("耗时:", time.time() - init_time)
 
-        print("Filtering detection results...")
+        print("正在过滤检测结果...")
         init_time = time.time()
         probs = probs.numpy()
         for i, p in enumerate(probs):
             predicted_class_idx = np.argmax(p)
             predicted_class_name = considered_classes[predicted_class_idx][0] if predicted_class_idx < len(considered_classes) else other_classes[predicted_class_idx - len(considered_classes)][0]
             if detected_objs.get(predicted_class_name) is not None:
-                # detected_objs[predicted_class_name].append((mask_points[i], p[predicted_class_idx], norm_vec[i]))
+                # detector_objs[预测类名称].append((mask_points[i], p[预测类_idx],norm_vec[i]))
                 detected_objs[predicted_class_name].append((mask_points[i], p[predicted_class_idx], image_features[i], dino_image_features[i]))
             if not os.path.exists(f"cache/{predicted_class_idx}_{predicted_class_name}"):
                 os.makedirs(f"cache/{predicted_class_idx}_{predicted_class_name}")
             cv2.imwrite(f"cache/{predicted_class_idx}_{predicted_class_name}/{i}_{p[predicted_class_idx]:.4f}.png", mask_images[i][:, :, ::-1])
-        print("time taken:", time.time() - init_time)
+        print("耗时:", time.time() - init_time)
         
         if save_to_cache:
             pickle.dump(bgr_images, open_file(f"cache/{TASK}/bgr_images.pkl", "wb"))
@@ -690,7 +731,7 @@ def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, 
     pickle.dump(detected_objs, open_file(f"log/{TASK}/detected_objs.pkl", "wb"))
 
     if visualize:
-        print("Plotting point cloud...")
+        print("正在绘制点云...")
         init_time = time.time()
         mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
         detected_objects_geomertries = o3d.geometry.TriangleMesh()
@@ -701,9 +742,22 @@ def detect_objs(load_from_cache=False, run_on_server=False, save_to_cache=True, 
                 detected_objects_geomertries += sphere
         detected_objects_geomertries.paint_uniform_color([0.0, 1.0, 0.0])
         o3d.visualization.draw_geometries([pcd_merged, mesh_frame, detected_objects_geomertries])
-        print("time taken:", time.time() - init_time)
+        print("耗时:", time.time() - init_time)
 
 def get_text_features(clip_candidates, clip_model):
+    """
+    获取文本特征。
+
+    这个函数首先尝试从缓存中加载文本特征。如果缓存不存在，它将使用CLIP模型和tokenizer来生成文本特征，
+    并将这些特征存储在缓存中以供将来使用。
+
+    参数:
+    clip_candidates (list): 一个包含候选项的列表，这些候选项将被转化为文本特征。
+    clip_model (CLIPModel): 一个预训练的CLIP模型，用于生成文本特征。
+
+    返回:
+    text_features (torch.Tensor): 一个包含文本特征的张量。
+    """
     global tokenizer
     try:
         text_features = pickle.load(open(f"cache/{TASK}/text_features.pkl", "rb"))
@@ -720,7 +774,7 @@ def get_text_features(clip_candidates, clip_model):
         pickle.dump(text_features, open_file(f"cache/{TASK}/text_features.pkl", "wb"))
         return text_features
 
-# ---------------------------------- Get task pose ----------------------------------
+#----------------------------------获取任务姿势---------------------------------
 
 def _get_task_pose(task_name, visualize=True):
     task_name = task_name[:-1] if task_name[-1] == '.' else task_name
@@ -827,7 +881,7 @@ def calculate_major_axis(point_cloud):
     eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
     main_axis = eigenvectors[:, np.argmax(eigenvalues)]
     return main_axis
-    # return calculate_normal_vector(point_cloud)
+    #返回计算法线向量（点云）
 
 def calculate_minor_axis(point_cloud):
     return calculate_normal_vector(point_cloud)
@@ -918,7 +972,7 @@ def get_bounding_box_from_pcd(point_cloud, forward_vec):
     else:
         return (1., 8., 3.)
 
-# ---------------------------------- Image feature ----------------------------------
+#----------------------------------图像特征 ----------------------------------------------
 
 def compare_text_image_sim(text, vis_feature):
     global clip_model, tokenizer
@@ -979,7 +1033,7 @@ def compare_feature(img_feature, task_name, visualize=False, threshold=10, metri
             detected_objects_geomertries.paint_uniform_color([0.0, 1.0, 0.0])
         o3d.visualization.draw_geometries([pcd_merged, mesh_frame, detected_objects_geomertries])
 
-# ---------------------------------- Others ----------------------------------
+# - - - - - - - - - - - - - - - - - 其他的  - - - - - - ---------------------
 
 def _update_object_state(ini_state, task_name):
     with open(prompt_update_obj_state_file, "r") as template_file:
@@ -1030,7 +1084,7 @@ def segment_image(image):
         new_mask = mask['segmentation'][y:y+h, x:x+w]
         im[new_mask] = image[y:y+h, x:x+w, :][new_mask]
         im = np.pad(im, ((3, 3), (3, 3), (0, 0)), 'constant', constant_values=background)
-        # im = image[y:y+h, x:x+w, :]
+        #im = 图像[y:y+h, x:x+w, :]
         mask_images.append(im)
 
 def save_current_image(directory_path, visualize=False):

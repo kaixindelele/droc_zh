@@ -28,7 +28,7 @@ prompt_get_task_feature_file = 'prompts/get_task_feature.txt'
 prompt_get_constraint_feature = read_py('prompts/get_constraint_feature.txt')
 rel_pos, rel_ori, gripper_opened = None, None, False
 
-# ------------------------------------------ Primitives ------------------------------------------
+#------------------------------------------原语 ------------------------------------------
 
 def get_current_state():
     if realrobot:
@@ -150,28 +150,28 @@ def execute_post_action(step_name):
         target_pos = parse_pos(f"a point 60cm above {current_pos}.", reference_frame='absolute')
         move_gripper_to_pose(target_pos, current_ori)
 
-# ------------------------------------------ Main function ------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - 主功能  - - -------------------------------------------------
 
 def main(args):
     global corr_rounds, use_interrupted_code, gripper_opened
 
-    # Infinite outmost loop
+    #最外层无限循环
     while True:
 
-        li = input('\n\n\n' + "I'm ready to take instruction." + '\n' + 'Input your instruction:')
-
-        # Get initial objects and their states
-        initialize_detection(first=True, load_image=args.load_image)
+        #li = input('\n\n\n' + "我已准备好接受指示。" + '\n' + '输入您的指示：')
+        li = 'pick the mug'
+        #获取初始对象及其状态
+        initialize_detection(first=True, load_image=args.load_image, robot_env=args.policy.robot_env)
         obj_state = get_initial_state()
         obj_dict = get_objs()
         print(obj_state)
 
-        # Retrieve plan-related knowledge and add it to the prompt
+        #检索计划相关知识并将其添加到提示中
         plan_related_info, image_features = retrieve_plan_info(li)
         prompt_plan_instance.set_object_state(obj_state)
         prompt_plan_instance.add_constraints(plan_related_info)
 
-        # Generate initial plans (which could only be wrong in not grounding objects)
+        #生成初始计划（如果没有将物体接地，这可能是错误的）
         prompt_plan = prompt_plan_instance.get_prompt()
         whole_prompt = prompt_plan + '\n' + '\n' + f"Instruction: {li}" + "\n"
         response = query_LLM(whole_prompt, ["Instruction:"], "cache/llm_response_planning_high.pkl")
@@ -179,11 +179,11 @@ def main(args):
         print('***raw plan***')
         print(raw_code_step)
 
-        # Ground the plan to true objects, as well as determine the which one is the true object
+        #将计划建立在真实对象的基础上，并确定哪一个是真实对象
         code_step, task_features = ground_plan(raw_code_step, plan_related_info, obj_dict, obj_state, image_features)
         plan_success = False
 
-        # Loop for handling plan failures
+        #用于处理计划失败的循环
         while not plan_success:
             try:
                 print('***grounded plan***')
@@ -195,7 +195,7 @@ def main(args):
                 clear_saved_detected_obj()
                 plan_features = {}
 
-                # Loop for executing each sub-step
+                #循环执行每个子步骤
                 for num, step_name in code_step.items():
                     parsed_step_name = step_name.lower()[:-1] if step_name[-1] == '.' else step_name.lower()
                     add_to_log("****Step name: " + parsed_step_name + '****', file_path=USER_LOG)
@@ -204,7 +204,7 @@ def main(args):
                     locals = defaultdict(dict)
                     initialize_detection()
 
-                    # Retrieve relavant task info and generate code
+                    #检索相关任务信息并生成代码
                     task_feature = task_features[int(num)-1]
                     if task_feature is not None:
                         set_saved_detected_obj(step_name, task_feature)
@@ -214,7 +214,7 @@ def main(args):
                     response = query_LLM(whole_prompt, ["# Task:", "# Outcome:"], "cache/llm_response_planning_low.pkl")
                     _, code_as_policies = format_code(response)
 
-                    # Add info to history temporary file for later interaction history retrieval
+                    #将信息添加到历史临时文件以供以后交互历史检索
                     tmp[li][step_name] = {}
                     tmp[li][step_name]['code response 0'] = code_as_policies
                     add_to_log('-'*80 + '\n' + '*whole prompt*' + '\n' + whole_prompt)
@@ -222,7 +222,7 @@ def main(args):
                     add_to_log('-'*80 + '\n' + '*original code*' + '\n' + code_as_policies + '\n' + '-'*80)
                     pickle.dump(tmp, open(HISTORY_TMP_PATH, "wb"))
 
-                    # Main loop for code execution, correction and code regeneration
+                    #用于代码执行、修正和代码重新生成的主循环
                     while True:
                         try:
                             add_to_log('-'*80 + '\n' + code_as_policies + '\n' + '-'*80, also_print=True)
@@ -271,9 +271,21 @@ def main(args):
                 code_step, obj_state = replan(corr_rounds, li, step_name, code_step, obj_state, plan_features)
         add_to_log("---------------------------Ready to move to next instruction...---------------------------", also_print=True)
 
-# ------------------------------------------ LLM reasoning functions ------------------------------------------
+#------------------------------------------LLM推理功能-----------------------------------------------------
 
 def failure_reasoning(step_name, li, corr_rounds):
+    """
+    失败推理函数，用于处理任务执行失败的情况
+
+    Args:
+        step_name (str): 当前任务步骤的名称
+        li (int): 当前任务的索引
+        corr_rounds (int): 当前任务的修正轮数
+
+    Returns:
+        str: 修正后的代码
+        int: 修正轮数
+    """
     tmp = load_file(HISTORY_TMP_PATH)
     _is_plan_error = is_plan_error(step_name, li, corr_rounds)
     if _is_plan_error:
@@ -305,6 +317,15 @@ def failure_reasoning(step_name, li, corr_rounds):
     return correction_code, corr_rounds
 
 def retrieve_plan_info(li):
+    """
+    从缓存中检索计划信息
+
+    Args:
+        li (int): 指令索引
+
+    Returns:
+        tuple: 包含约束和图像特征的元组
+    """
     if not os.path.exists('cache/task_history'):
         os.makedirs('cache/task_history')
     if not os.path.exists('cache/task_history/constraints.pkl'):
@@ -355,6 +376,21 @@ def retrieve_plan_info(li):
         return ([], None)
 
 def ground_plan(raw_plan_step, plan_related_info, obj_dict, obj_state, image_features, threshold=3):
+    """
+    将原始计划步骤转化为具体的执行步骤，并进行对象名称的替换和视觉语义检索
+
+    Args:
+        raw_plan_step (dict): 原始计划步骤，包含字符串和元组类型的步骤
+        plan_related_info (list): 计划相关信息，用于对象名称的替换和视觉语义检索
+        obj_dict (dict): 对象字典，包含对象名称和对象特征
+        obj_state (dict): 对象状态，记录对象的位置和姿态
+        image_features (list): 图像特征，用于视觉-视觉检索
+        threshold (int, optional): 检索阈值，用于视觉语义检索. Defaults to 3.
+
+    Returns:
+        dict: 转化后的执行步骤
+        list: 任务特征列表
+    """
     grounded_plan = {}
     task_features = []
     for num, step in raw_plan_step.items():
@@ -369,7 +405,7 @@ def ground_plan(raw_plan_step, plan_related_info, obj_dict, obj_state, image_fea
                 print(f"Replacing '{raw_step}' with '{grounded_plan[num]}'.")
             else:
                 raw_step, obj_names_dict = step
-                # Visual-semantic retrieval
+                # 视觉语义检索
                 query_text = list(obj_names_dict.keys())[0]
                 query_obj_name = get_query_obj(query_text)
                 if query_obj_name is not None:
@@ -381,7 +417,7 @@ def ground_plan(raw_plan_step, plan_related_info, obj_dict, obj_state, image_fea
                     retrieved_idx = prob_order[:threshold]
                     plan_related_info = plan_related_info[retrieved_idx]
                     image_features = image_features[retrieved_idx]
-                # Visual-visual retrieval
+                # 视觉-视觉检索
                 task_feature = get_task_detection(raw_step)
                 sims = []
                 for feature in image_features:
@@ -397,6 +433,16 @@ def ground_plan(raw_plan_step, plan_related_info, obj_dict, obj_state, image_fea
     return grounded_plan, task_features
 
 def replace_step_with_true_obj_name(step, true_object_name):
+    """
+    将步骤中的对象名称替换为真实对象名称
+
+    Args:
+        step (str): 步骤名称
+        true_object_name (str): 真实对象名称
+
+    Returns:
+        str: 替换后的步骤
+    """
     prompt = prompt_replace_true_name + '\n' + f'Step name: {step}' + '\n' + f'Object name: {true_object_name}' + '\n' + 'Output: '
     response = query_LLM(prompt, [], 'cache/llm_replace_true_name.pkl')
     grounded_step = response.text
@@ -653,22 +699,24 @@ if __name__ == '__main__':
     global policy, realrobot
     def delete_tmp():
         delete_file(HISTORY_TMP_PATH)
-        # with open('new_codeprompt.txt', 'w') as file:
-        #     file.write(prompt_codepolicy_instance.get_prompt())
-        # with open('new_planprompt.txt', 'w') as file:
-        #     file.write(prompt_plan_instance.get_prompt())
+        #以 open('new_codeprompt.txt', 'w') 作为文件：
+#文件.write(prompt_codepolicy_instance.get_prompt())
+#以 open('new_planprompt.txt', 'w') 作为文件：
+#文件.write(prompt_plan_instance.get_prompt())
     atexit.register(delete_tmp)
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", type=str, default='drawer')
-    parser.add_argument("--realrobot", type=bool, default=False)
-    parser.add_argument("--load_image", type=bool, default=False)
+    parser.add_argument("--realrobot", type=bool, default=True)
+    parser.add_argument("--load_image", type=bool, default=True)
     args = parser.parse_args()
     task = args.task
     realrobot = args.realrobot
+    print("realrobot: ", realrobot)
     set_policy_and_task(realrobot, task)
     if realrobot:
         from utils.robot.robot_policy import KptPrimitivePolicy
         policy = KptPrimitivePolicy()
+        args.policy = policy
     else:
         from utils.robot.dummy_policy import DummyPolicy
         policy = DummyPolicy()

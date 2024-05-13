@@ -15,7 +15,7 @@ For more details please refer to our [paper](https://arxiv.org/abs/2311.10678).
 
 1. Create a virtual environment with Python=3.8 and install all the dependencies.
       ```bash
-      conda create -n droc python==3.8
+      conda create -n droc python==3.9.19
       pip install -r requirements.txt
       pip install -e .
       ```
